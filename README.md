@@ -1,5 +1,8 @@
 # Funsize Balrogworker
 
+A small scriptworker used for submitting funsize metadata to balrog.
+
+
 ## Installation
 
 The application is dockerized and can be built and run with the following

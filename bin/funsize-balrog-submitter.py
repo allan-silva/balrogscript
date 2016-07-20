@@ -113,6 +113,7 @@ def get_manifest(parent_url):
     manifest = json.loads(data)
     return manifest
 
+
 def verify_task_schema(task_definition):
     task_reqs = ('parent_task_artifacts_url', 'signing_cert')
     for req in task_reqs:
@@ -120,8 +121,10 @@ def verify_task_schema(task_definition):
             raise KeyError('%s missing from taskdef!' % req)
 
 
-def main():
+def verify_args():
+
     parser = argparse.ArgumentParser()
+
     parser.add_argument("--taskdef", required=True,
                         help="File location of task graph"),
     parser.add_argument("-d", "--dummy", action="store_true",
@@ -129,20 +132,19 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_const",
                         dest="loglevel", const=logging.DEBUG,
                         default=logging.INFO)
-    args = parser.parse_args()
-    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s",
-                        stream=sys.stdout,
-                        level=args.loglevel)
-    logging.getLogger("requests").setLevel(logging.WARNING)
-    logging.getLogger("boto").setLevel(logging.WARNING)
-
-    with open(args.taskdef,'r') as f:
-        task_definition = json.load(f)
-    verify_task_schema(task_definition)
-
-    parent_url = task_definition['payload']['parent_task_artifacts_url']
-    manifest = get_manifest(parent_url)
-
+    parser.add_argument("--balrog-api-root", default=os.environ.get("BALROG_API_ROOT"),
+                        dest="api_root", help="Balrog api url")
+    parser.add_argument("--balrog-username", default=os.environ.get("BALROG_USERNAME"),
+                        dest="balrog_username", help="Balrog admin api username")
+    parser.add_argument("--balrog-password", default=os.environ.get("BALROG_PASSWORD"),
+                        dest="balrog_password", help="Balrog admin api password")
+    parser.add_argument("--s3-bucket", default=os.environ.get("S3_BUCKET"),
+                        dest="s3_bucket", help="S3 Bucket Name: used for uploading partials")
+    parser.add_argument("--aws-key-id", default=os.environ.get("AWS_ACCESS_KEY_ID"),
+                        dest="aws_access_key_id", help="AWS Access Key ID: S3 Credentials")
+    parser.add_argument("--aws-key-secret", default=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+                        dest="aws_secret_access_key", help="AWS Secret Key: S3 Credentials")
+    """
     api_root = os.environ.get("BALROG_API_ROOT")
     if not api_root:
         raise RuntimeError("BALROG_API_ROOT environment variable not set")
@@ -153,8 +155,7 @@ def main():
         raise RuntimeError("BALROG_USERNAME and BALROG_PASSWORD environment "
                            "variables should be set")
 
-    signing_cert_name = task_definition['payload']['signing_cert']
-    signing_cert = "/app/keys/{}.pubkey".format(signing_cert_name)
+    auth = (balrog_username, balrog_password)
 
     s3_bucket = os.environ.get("S3_BUCKET")
     aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID")
@@ -164,8 +165,32 @@ def main():
         uploads_enabled = False
     else:
         uploads_enabled = True
+    """
 
-    auth = (balrog_username, balrog_password)
+    return parser.parse_args()
+
+
+def main():
+
+    args = verify_args()
+
+    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s",
+                        stream=sys.stdout,
+                        level=args.loglevel)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    logging.getLogger("boto").setLevel(logging.WARNING)
+
+    with open(args.taskdef,'r') as f:
+        task_definition = json.load(f)
+        verify_task_schema(task_definition)
+
+    parent_url = task_definition['payload']['parent_task_artifacts_url']
+    manifest = get_manifest(parent_url)
+
+    signing_cert_name = task_definition['payload']['signing_cert']
+    signing_cert = "/app/keys/{}.pubkey".format(signing_cert_name)
+
+
 
     for e in manifest:
         complete_info = [{
