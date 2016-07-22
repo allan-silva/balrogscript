@@ -55,16 +55,20 @@ def verify_signature(mar, signature):
     m.verify_signatures()
 
 
-def verify_copy_to_s3(bucket_name, aws_access_key_id, aws_secret_access_key,
-                      mar_url, mar_dest, signing_cert):
-    conn = S3Connection(aws_access_key_id, aws_secret_access_key)
-    bucket = conn.get_bucket(bucket_name)
+def verify_copy_to_s3(args,mar_url, mar_dest):
+
+    # For local development, send TC url directly
+    if not args.uploads_enabled:
+        return mar_url
+
+    conn = S3Connection(args.aws_key_id, args.aws_key_secret)
+    bucket = conn.get_bucket(args.s3_bucket)
     _, dest = tempfile.mkstemp()
     log.info("Downloading %s to %s...", mar_url, dest)
     download(mar_url, dest)
     log.info("Verifying the signature...")
     if not os.getenv("MOZ_DISABLE_MAR_CERT_VERIFICATION"):
-        verify_signature(dest, signing_cert)
+        verify_signature(dest, args.signing_cert)
     for name in possible_names(mar_dest, 10):
         log.info("Checking if %s already exists", name)
         key = bucket.get_key(name)
@@ -139,7 +143,7 @@ def load_task(task_file):
     return parent_url, signing_cert
 
 
-def verify_args(args):
+def verify_args(argv):
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--taskdef", required=True,
@@ -185,10 +189,20 @@ def verify_args(args):
     else:
         uploads_enabled = True
     """
-    return parser.parse_args(args)
+    args = parser.parse_args(argv)
+
+    # Disable uploading to S3 if any of the credentials are missing, or if specified as a cli argument
+    args.uploads_enabled = (not args.disable_s3) and args.s3_bucket and args.aws_key_id and args.aws_key_secret
+    if not args.uploads_enabled:
+        log.info("Skipping S3 uploads, submitting taskcluster artifact urls instead.")
+
+    return args
 
 
-def submit_releases(manifest,args,auth,uploads_enabled,parent_url,signing_cert):
+def submit_releases(manifest,args):
+
+    auth = (args.balrog_username,args.balrog_password)
+
     for e in manifest:
         complete_info = [{
             "hash": e["to_hash"],
@@ -215,9 +229,9 @@ def submit_releases(manifest,args,auth,uploads_enabled,parent_url,signing_cert):
                 hashFunction='sha512',
                 partialInfo=partial_info, completeInfo=complete_info,
             ))
-        elif "from_buildid" in e and uploads_enabled:
+        elif "from_buildid" in e:
             log.info("Nightly style balrog submission")
-            partial_mar_url = "{}/{}".format(parent_url,
+            partial_mar_url = "{}/{}".format(args.parent_url,
                                              e["mar"])
             complete_mar_url = e["to_mar"]
             dest_prefix = "{branch}/{buildid}".format(
@@ -232,12 +246,8 @@ def submit_releases(manifest,args,auth,uploads_enabled,parent_url,signing_cert):
             )
             complete_mar_dest = "{}/{}".format(dest_prefix,
                                                complete_mar_filename)
-            partial_info[0]["url"] = verify_copy_to_s3(
-                args.s3_bucket, args.aws_key_id, args.aws_key_secret,
-                partial_mar_url, partial_mar_dest, signing_cert)
-            complete_info[0]["url"] = verify_copy_to_s3(
-                args.s3_bucket, args.aws_key_id, args.aws_key_secret,
-                complete_mar_url, complete_mar_dest, signing_cert)
+            partial_info[0]["url"] = verify_copy_to_s3(args, partial_mar_url, partial_mar_dest)
+            complete_info[0]["url"] = verify_copy_to_s3(args,complete_mar_url, complete_mar_dest)
             partial_info[0]["from_buildid"] = e["from_buildid"]
             submitter = NightlySubmitterV4(api_root=args.api_root, auth=auth,
                                            dummy=args.dummy)
@@ -261,14 +271,10 @@ def main():
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("boto").setLevel(logging.WARNING)
 
-    # Disable uploading to S3 if any of the credentials are missing, or if specified as a cli argument
-    uploads_enabled = (not args.disable_s3) and args.s3_bucket and args.aws_key_id and args.aws_key_secret
-    auth = (args.balrog_username, args.balrog_password)
+    args.parent_url, args.signing_cert = load_task(args.taskdef)
+    manifest = get_manifest(args.parent_url)
 
-    parent_url, signing_cert = load_task(args.taskdef)
-    manifest = get_manifest(parent_url)
-
-    submit_releases(manifest, args, auth, uploads_enabled, parent_url, signing_cert)
+    submit_releases(manifest, args)
 
 
 if __name__ == '__main__':
