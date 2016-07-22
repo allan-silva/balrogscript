@@ -185,25 +185,10 @@ def verify_args(args):
     else:
         uploads_enabled = True
     """
-
     return parser.parse_args(args)
 
 
-def main():
-    args = verify_args(sys.argv[1:])
-    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s",
-                        stream=sys.stdout,
-                        level=args.loglevel)
-    logging.getLogger("requests").setLevel(logging.WARNING)
-    logging.getLogger("boto").setLevel(logging.WARNING)
-
-    # Disable uploading to S3 if any of the credentials are missing, or if specified as a cli argument
-    uploads_enabled = (not args.disable_s3) and args.s3_bucket and args.aws_key_id and args.aws_key_secret
-    auth = (args.balrog_username, args.balrog_password)
-
-    parent_url, signing_cert = load_task(args.taskdef)
-    manifest = get_manifest(parent_url)
-
+def submit_releases(manifest,args,auth,uploads_enabled,parent_url,signing_cert):
     for e in manifest:
         complete_info = [{
             "hash": e["to_hash"],
@@ -266,6 +251,24 @@ def main():
                   )
         else:
             raise RuntimeError("Cannot determine Balrog submission style")
+
+
+def main():
+    args = verify_args(sys.argv[1:])
+    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s",
+                        stream=sys.stdout,
+                        level=args.loglevel)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    logging.getLogger("boto").setLevel(logging.WARNING)
+
+    # Disable uploading to S3 if any of the credentials are missing, or if specified as a cli argument
+    uploads_enabled = (not args.disable_s3) and args.s3_bucket and args.aws_key_id and args.aws_key_secret
+    auth = (args.balrog_username, args.balrog_password)
+
+    parent_url, signing_cert = load_task(args.taskdef)
+    manifest = get_manifest(parent_url)
+
+    submit_releases(manifest, args, auth, uploads_enabled, parent_url, signing_cert)
 
 
 if __name__ == '__main__':
