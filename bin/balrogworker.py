@@ -58,7 +58,7 @@ def verify_signature(mar, signature):
 def verify_copy_to_s3(args,mar_url, mar_dest):
 
     # For local development, send TC url directly
-    if not args.uploads_enabled:
+    if args.disable_s3:
         return mar_url
 
     conn = S3Connection(args.aws_key_id, args.aws_key_secret)
@@ -67,8 +67,9 @@ def verify_copy_to_s3(args,mar_url, mar_dest):
     log.info("Downloading %s to %s...", mar_url, dest)
     download(mar_url, dest)
     log.info("Verifying the signature...")
-    if not os.getenv("MOZ_DISABLE_MAR_CERT_VERIFICATION"):
+    if not args.disable_cert_verify:
         verify_signature(dest, args.signing_cert)
+
     for name in possible_names(mar_dest, 10):
         log.info("Checking if %s already exists", name)
         key = bucket.get_key(name)
@@ -99,7 +100,7 @@ def verify_copy_to_s3(args,mar_url, mar_dest):
             log.info("%s already exists with different checksum, "
                      "trying another one...", name)
 
-    raise RuntimeError("Cannot generate a unique name for %s", mar_dest)
+    raise RuntimeError("Cannot generate a unique name for %s. Limit of 10 reached.", mar_dest)
 
 
 def possible_names(initial_name, amount):
@@ -167,6 +168,8 @@ def verify_args(argv):
                         dest="aws_key_secret", help="AWS Secret Key: S3 Credentials")
     parser.add_argument("--disable-s3", default=False, action='store_true',
                         help="Instead of uploading artifacts to S3, send balrog the tc artifact url")
+    parser.add_argument("--disable-certs", default=os.environ.get("MOZ_DISABLE_MAR_CERT_VERIFICATION"),
+                       action="store_true", help="Disable mar signature verification")
     """
     api_root = os.environ.get("BALROG_API_ROOT")
     if not api_root:
@@ -192,8 +195,8 @@ def verify_args(argv):
     args = parser.parse_args(argv)
 
     # Disable uploading to S3 if any of the credentials are missing, or if specified as a cli argument
-    args.uploads_enabled = (not args.disable_s3) and args.s3_bucket and args.aws_key_id and args.aws_key_secret
-    if not args.uploads_enabled:
+    args.disable_s3 = args.disable_s3 or not (args.s3_bucket and args.aws_key_id and args.aws_key_secret)
+    if args.disable_s3:
         log.info("Skipping S3 uploads, submitting taskcluster artifact urls instead.")
 
     return args
