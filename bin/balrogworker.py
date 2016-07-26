@@ -55,8 +55,7 @@ def verify_signature(mar, signature):
     m.verify_signatures()
 
 
-def verify_copy_to_s3(args,mar_url, mar_dest):
-
+def verify_copy_to_s3(args, mar_url, mar_dest):
     # For local development, send TC url directly
     if args.disable_s3:
         return mar_url
@@ -140,7 +139,7 @@ def load_task(task_file):
     parent_url = task_definition['payload']['parent_task_artifacts_url']
     signing_cert_name = task_definition['payload']['signing_cert']
     bin_directory = os.path.dirname(os.path.abspath(__file__))
-    signing_cert = os.path.join(bin_directory,"../keys/{}.pubkey".format(signing_cert_name))
+    signing_cert = os.path.join(bin_directory, "../keys/{}.pubkey".format(signing_cert_name))
     return parent_url, signing_cert
 
 
@@ -168,30 +167,9 @@ def verify_args(argv):
                         dest="aws_key_secret", help="AWS Secret Key: S3 Credentials")
     parser.add_argument("--disable-s3", default=False, action='store_true',
                         help="Instead of uploading artifacts to S3, send balrog the tc artifact url")
-    parser.add_argument("--disable-certs", default=os.environ.get("MOZ_DISABLE_MAR_CERT_VERIFICATION"),
-                       action="store_true", help="Disable mar signature verification")
-    """
-    api_root = os.environ.get("BALROG_API_ROOT")
-    if not api_root:
-        raise RuntimeError("BALROG_API_ROOT environment variable not set")
+    parser.add_argument("--disable-certs", dest="disable_certs", action="store_true",
+                        help="Disable mar signature verification")
 
-    balrog_username = os.environ.get("BALROG_USERNAME")
-    balrog_password = os.environ.get("BALROG_PASSWORD")
-    if not balrog_username and not balrog_password:
-        raise RuntimeError("BALROG_USERNAME and BALROG_PASSWORD environment "
-                           "variables should be set")
-
-    auth = (balrog_username, balrog_password)
-
-    s3_bucket = os.environ.get("S3_BUCKET")
-    aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID")
-    aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-    if not (s3_bucket and aws_access_key_id and aws_secret_access_key):
-        log.warn("Skipping S3 uploads...")
-        uploads_enabled = False
-    else:
-        uploads_enabled = True
-    """
     args = parser.parse_args(argv)
 
     # Disable uploading to S3 if any of the credentials are missing, or if specified as a cli argument
@@ -199,71 +177,77 @@ def verify_args(argv):
     if args.disable_s3:
         log.info("Skipping S3 uploads, submitting taskcluster artifact urls instead.")
 
+    args.parent_url, args.signing_cert = load_task(args.taskdef)
+
     return args
 
+def create_submitter(e, args):
+    auth = (args.balrog_username, args.balrog_password)
 
-def submit_releases(manifest,args):
+    complete_info = [{
+        "hash": e["to_hash"],
+        "size": e["to_size"],
+    }]
+    partial_info = [{
+        "hash": e["hash"],
+        "size": e["size"],
+    }]
 
-    auth = (args.balrog_username,args.balrog_password)
+    if "previousVersion" in e and "previousBuildNumber" in e:
+        log.info("Release style balrog submission")
+        partial_info[0]["previousVersion"] = e["previousVersion"]
+        partial_info[0]["previousBuildNumber"] = e["previousBuildNumber"]
+        submitter = ReleaseSubmitterV4(api_root=args.api_root,
+                                       auth=auth,
+                                       dummy=args.dummy)
 
-    for e in manifest:
-        complete_info = [{
-            "hash": e["to_hash"],
-            "size": e["to_size"],
-        }]
-        partial_info = [{
-            "hash": e["hash"],
-            "size": e["size"],
-        }]
+        return submitter, {'platform': e["platform"],
+                           'productName': e["appName"],
+                           'version': e["toVersion"],
+                           'build_number': e["toBuildNumber"],
+                           'appVersion': e["version"],
+                           'extVersion': e["version"],
+                           'buildID': e["to_buildid"],
+                           'locale': e["locale"],
+                           'hashFunction': 'sha512',
+                           'partialInfo': partial_info,
+                           'completeInfo': complete_info}
 
-        if "previousVersion" in e and "previousBuildNumber" in e:
-            log.info("Release style balrog submission")
-            partial_info[0]["previousVersion"] = e["previousVersion"]
-            partial_info[0]["previousBuildNumber"] = e["previousBuildNumber"]
-            submitter = ReleaseSubmitterV4(api_root=args.api_root,
-                                           auth=auth,
-                                           dummy=args.dummy)
-            retry(lambda: submitter.run(
-                platform=e["platform"], productName=e["appName"],
-                version=e["toVersion"],
-                build_number=e["toBuildNumber"],
-                appVersion=e["version"], extVersion=e["version"],
-                buildID=e["to_buildid"], locale=e["locale"],
-                hashFunction='sha512',
-                partialInfo=partial_info, completeInfo=complete_info,
-            ))
-        elif "from_buildid" in e:
-            log.info("Nightly style balrog submission")
-            partial_mar_url = "{}/{}".format(args.parent_url,
-                                             e["mar"])
-            complete_mar_url = e["to_mar"]
-            dest_prefix = "{branch}/{buildid}".format(
-                branch=e["branch"], buildid=e["to_buildid"])
-            partial_mar_dest = "{}/{}".format(dest_prefix, e["mar"])
-            complete_mar_filename = "{appName}-{branch}-{version}-" \
-                                    "{platform}-{locale}.complete.mar"
-            complete_mar_filename = complete_mar_filename.format(
-                appName=e["appName"], branch=e["branch"],
-                version=e["version"], platform=e["platform"],
-                locale=e["locale"]
-            )
-            complete_mar_dest = "{}/{}".format(dest_prefix,
-                                               complete_mar_filename)
-            partial_info[0]["url"] = verify_copy_to_s3(args, partial_mar_url, partial_mar_dest)
-            complete_info[0]["url"] = verify_copy_to_s3(args,complete_mar_url, complete_mar_dest)
-            partial_info[0]["from_buildid"] = e["from_buildid"]
-            submitter = NightlySubmitterV4(api_root=args.api_root, auth=auth,
-                                           dummy=args.dummy)
-            retry(lambda: submitter.run(
-                platform=e["platform"], buildID=e["to_buildid"],
-                productName=e["appName"], branch=e["branch"],
-                appVersion=e["version"], locale=e["locale"],
-                hashFunction='sha512', extVersion=e["version"],
-                partialInfo=partial_info, completeInfo=complete_info),
-                  attempts=30, sleeptime=10, max_sleeptime=60,
-                  )
-        else:
-            raise RuntimeError("Cannot determine Balrog submission style")
+    elif "from_buildid" in e:
+        log.info("Nightly style balrog submission")
+        partial_mar_url = "{}/{}".format(args.parent_url,
+                                         e["mar"])
+        complete_mar_url = e["to_mar"]
+        dest_prefix = "{branch}/{buildid}".format(
+            branch=e["branch"], buildid=e["to_buildid"])
+        partial_mar_dest = "{}/{}".format(dest_prefix, e["mar"])
+        complete_mar_filename = "{appName}-{branch}-{version}-" \
+                                "{platform}-{locale}.complete.mar"
+        complete_mar_filename = complete_mar_filename.format(
+            appName=e["appName"], branch=e["branch"],
+            version=e["version"], platform=e["platform"],
+            locale=e["locale"]
+        )
+        complete_mar_dest = "{}/{}".format(dest_prefix,
+                                           complete_mar_filename)
+        partial_info[0]["url"] = verify_copy_to_s3(args, partial_mar_url, partial_mar_dest)
+        complete_info[0]["url"] = verify_copy_to_s3(args, complete_mar_url, complete_mar_dest)
+        partial_info[0]["from_buildid"] = e["from_buildid"]
+        submitter = NightlySubmitterV4(api_root=args.api_root, auth=auth,
+                                       dummy=args.dummy)
+
+        return submitter, {'platform': e["platform"],
+                          'buildID': e["to_buildid"],
+                          'productName': e["appName"],
+                          'branch': e["branch"],
+                          'appVersion': e["version"],
+                          'locale': e["locale"],
+                          'hashFunction': 'sha512',
+                          'extVersion': e["version"],
+                          'partialInfo': partial_info,
+                          'completeInfo': complete_info}
+    else:
+        raise RuntimeError("Cannot determine Balrog submission style. Check manifest.json")
 
 
 def main():
@@ -274,10 +258,11 @@ def main():
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("boto").setLevel(logging.WARNING)
 
-    args.parent_url, args.signing_cert = load_task(args.taskdef)
     manifest = get_manifest(args.parent_url)
 
-    submit_releases(manifest, args)
+    for e in manifest:
+        submitter, release = create_submitter(e, args)
+        retry(lambda: submitter.run(**release))
 
 
 if __name__ == '__main__':
