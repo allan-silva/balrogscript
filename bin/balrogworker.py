@@ -66,7 +66,7 @@ def verify_copy_to_s3(args, mar_url, mar_dest):
     log.info("Downloading %s to %s...", mar_url, dest)
     download(mar_url, dest)
     log.info("Verifying the signature...")
-    if not args.disable_cert_verify:
+    if not args.disable_certs:
         verify_signature(dest, args.signing_cert)
 
     for name in possible_names(mar_dest, 10):
